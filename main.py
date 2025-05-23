@@ -23,7 +23,7 @@ defaults = Defaults(tzinfo=almaty_tz)
 user_cities = load_user_cities()
 subscriptions = load_subscriptions()
 
-
+last_sent = {}
 def get_weather_forecast(city):
     url = f"http://api.openweathermap.org/data/2.5/forecast?q={city}&appid={OPENWEATHER_TOKEN}&units=metric&lang=ru"
     response = requests.get(url)
@@ -99,20 +99,35 @@ async def set_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_daily_weather_check(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now(almaty_tz).time()
-    print(f"[send_daily_weather_check] Запуск в {now}")
-    if time(9, 0) <= now <= time(9, 30):
-        user_id = context.job.data["user_id"]
+    now = datetime.now(almaty_tz)
+    user_id = context.job.data["user_id"]
+
+
+    if last_sent.get(user_id) == now.date():
+        return
+
+    print(f"[send_daily_weather_check] Запуск в {now.time()}")
+    if time(9, 0) <= now.time() <= time(9, 30):
         city = user_cities.get(user_id)
         if city:
             forecast = get_weather_forecast(city)
             if forecast:
-                await context.bot.send_message(chat_id=int(user_id), text=f"Доброе утро! Вот прогноз погоды на сегодня:\n\n{forecast}")
+                await context.bot.send_message(
+                    chat_id=int(user_id),
+                    text=f"Доброе утро! Вот прогноз погоды на сегодня:\n\n{forecast}"
+                )
             else:
-                await context.bot.send_message(chat_id=int(user_id), text=f"Не удалось получить прогноз погоды для города {city}.")
+                await context.bot.send_message(
+                    chat_id=int(user_id),
+                    text=f"Не удалось получить прогноз погоды для города {city}."
+                )
         else:
-            await context.bot.send_message(chat_id=int(user_id), text="Вы не установили город. Используйте команду /setcity <город>.")
+            await context.bot.send_message(
+                chat_id=int(user_id),
+                text="Вы не установили город. Используйте команду /setcity <город>."
+            )
 
+        last_sent[user_id] = now.date()
 
 async def start_daily_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -128,7 +143,7 @@ async def start_daily_weather(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     context.job_queue.run_repeating(
         send_daily_weather_check,
-        interval=240,
+        interval=60,
         first=1,
         data={"user_id": user_id_str},
         name=user_id_str,
