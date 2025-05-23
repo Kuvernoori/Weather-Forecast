@@ -11,7 +11,8 @@ A simple Telegram bot that sends a weather forecast for a selected city and allo
 ## 📦 Structure 
 ```
 ├── main.py                              
-├── subscription_storage.py               
+├── subscription_storage.py
+├── storage.py        
 ├── .env                    
 └── .gitignore
 ```
