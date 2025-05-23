@@ -1,19 +1,27 @@
 import os
 import requests
-from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes
-)
+from zoneinfo import ZoneInfo
 from datetime import time, datetime
 
+from dotenv import load_dotenv
+
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes, Defaults
+)
+
 from storage import load_user_cities, save_user_cities
+from subscription_storage import load_subscriptions, save_subscriptions
 
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENWEATHER_TOKEN = os.getenv("OPENWEATHER_TOKEN")
 
+almaty_tz = ZoneInfo("Asia/Almaty")
+defaults = Defaults(tzinfo=almaty_tz)
+
 user_cities = load_user_cities()
+subscriptions = load_subscriptions()
 
 
 def get_weather_forecast(city):
@@ -23,14 +31,14 @@ def get_weather_forecast(city):
         return None
 
     data = response.json()
-    forecast_list = data["list"]
-    today = datetime.now().date()
+    forecast_list = data.get("list", [])
+    today = datetime.now(almaty_tz).date()
 
     result = [f"🌤 Прогноз погоды на сегодня в {city.title()}:\n"]
     has_data = False
 
     for item in forecast_list:
-        forecast_time = datetime.fromtimestamp(item["dt"])
+        forecast_time = datetime.fromtimestamp(item["dt"], tz=almaty_tz)
         if forecast_time.date() != today:
             continue
 
@@ -59,12 +67,15 @@ def get_weather_forecast(city):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Привет! Чтобы установить город, напиши команду:\n"
+    text = (
+        "Привет! Чтобы установить твой город, напиши команду:\n"
         "/setcity <название города>\n"
         "Чтобы подписаться на ежедневную погоду, напиши /dailyweather\n"
-        "Для тестовой проверки погоды напиши /testweather"
     )
+    if update.message:
+        await update.message.reply_text(text)
+    else:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
 
 
 async def set_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -75,26 +86,32 @@ async def set_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id = str(update.effective_user.id)
             user_cities[user_id] = city
             save_user_cities(user_cities)
-            await update.message.reply_text(f"Город установлен: {city}\n\n{forecast}")
+            text = f"Город установлен: {city}\n\n{forecast}"
         else:
-            await update.message.reply_text("Не удалось найти такой город. Попробуйте снова.")
+            text = "Не удалось найти такой город. Попробуйте снова."
     else:
-        await update.message.reply_text("Пожалуйста, укажи город после команды. Например: /setcity Москва")
+        text = "Пожалуйста, укажи город после команды. Например: /setcity Москва"
+
+    if update.message:
+        await update.message.reply_text(text)
+    else:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
 
 
-async def send_daily_weather(context: ContextTypes.DEFAULT_TYPE):
-    job_data = context.job.data
-    user_id = str(job_data["user_id"])
-    city = user_cities.get(user_id)
-
-    if city:
-        forecast = get_weather_forecast(city)
-        if forecast:
-            await context.bot.send_message(chat_id=int(user_id), text=f"Доброе утро! Вот прогноз погоды на сегодня:\n\n{forecast}")
+async def send_daily_weather_check(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now(almaty_tz).time()
+    print(f"[send_daily_weather_check] Запуск в {now}")
+    if time(9, 0) <= now <= time(9, 30):
+        user_id = context.job.data["user_id"]
+        city = user_cities.get(user_id)
+        if city:
+            forecast = get_weather_forecast(city)
+            if forecast:
+                await context.bot.send_message(chat_id=int(user_id), text=f"Доброе утро! Вот прогноз погоды на сегодня:\n\n{forecast}")
+            else:
+                await context.bot.send_message(chat_id=int(user_id), text=f"Не удалось получить прогноз погоды для города {city}.")
         else:
-            await context.bot.send_message(chat_id=int(user_id), text=f"Не удалось получить прогноз погоды для города {city}.")
-    else:
-        await context.bot.send_message(chat_id=int(user_id), text="Вы не установили город. Используйте команду /setcity <город>.")
+            await context.bot.send_message(chat_id=int(user_id), text="Вы не установили город. Используйте команду /setcity <город>.")
 
 
 async def start_daily_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,41 +126,34 @@ async def start_daily_weather(update: Update, context: ContextTypes.DEFAULT_TYPE
     for job in current_jobs:
         job.schedule_removal()
 
-    context.job_queue.run_daily(
-        send_daily_weather,
-        time=time(hour=8, minute=0),
-        chat_id=user_id,
+    context.job_queue.run_repeating(
+        send_daily_weather_check,
+        interval=240,
+        first=1,
+        data={"user_id": user_id_str},
         name=user_id_str,
-        data={"user_id": user_id}
     )
-
-    await update.message.reply_text("Вы подписались на ежедневную рассылку прогноза в 8:00 утра!")
+    print(f"[start_daily_weather] Задача подписки запущена для пользователя {user_id_str}")
+    await update.message.reply_text("Подписка на ежедневную рассылку погоды активирована!")
 
 
 async def test_weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    city = user_cities.get(user_id)
-    if city:
-        forecast = get_weather_forecast(city)
-        if forecast:
-            await update.message.reply_text(f"Тестовый прогноз погоды для {city}:\n\n{forecast}")
-        else:
-            await update.message.reply_text(f"Не удалось получить прогноз для города {city}.")
-    else:
-        await update.message.reply_text("Вы не установили город. Используйте команду /setcity <город>.")
+    job_context = {"user_id": str(update.effective_user.id)}
+    context.job = type("obj", (object,), {"data": job_context})
+    await send_daily_weather_check(context)
 
 
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).defaults(defaults).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("setcity", set_city))
     app.add_handler(CommandHandler("dailyweather", start_daily_weather))
     app.add_handler(CommandHandler("testweather", test_weather))
 
-    print("Бот запущен!")
+    print("✅ Бот запущен!")
     app.run_polling()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
