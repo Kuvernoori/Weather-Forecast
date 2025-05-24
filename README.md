@@ -6,7 +6,7 @@ A simple Telegram bot that sends a weather forecast for a selected city and allo
 
 - Receiving the current weather forecast for a selected city
 - Setting up a city using the command `/setcity`
-- Daily forecast at 9:00 am Almaty time (UTC +6 , old time)
+- Daily forecast at 8:00 am Astana time (UTC +5)
 
 ## 📦 Structure 
 ```
