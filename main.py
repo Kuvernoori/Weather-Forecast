@@ -107,7 +107,7 @@ async def send_daily_weather_check(context: ContextTypes.DEFAULT_TYPE):
         return
 
     print(f"[send_daily_weather_check] Запуск в {now.time()}")
-    if time(9, 0) <= now.time() <= time(9, 30):
+    if time(8, 0) <= now.time() <= time(8, 30):
         city = user_cities.get(user_id)
         if city:
             forecast = get_weather_forecast(city)
